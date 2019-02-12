@@ -33,6 +33,9 @@
 (defvar hevm-stack-buffer nil
   "Buffer that displays the current VM's word stack.")
 
+(defvar hevm-bytecode-buffer nil
+  "Buffer that displays the currently executing bytecode.")
+
 (defvar hevm-plan '()
   "When the next prompt is ready, we pop the head of this list
 and send it as input.")
@@ -51,6 +54,9 @@ and send it as input.")
 
 (defvar hevm-source-map-overlay nil
   "Overlay that moves around in the debugged source code buffers.")
+
+(defvar hevm-code-cache '()
+  "alist for cached bytecodes received from hevm.")
 
 (define-derived-mode hevm-mode comint-mode "Hevm"
   "Major mode for `hevm'."
@@ -125,6 +131,10 @@ and send it as input.")
   '(("q" . quit-window))
   :group 'hevm)
 
+(defun hevm-add-to-cache (new)
+  (dolist (item new)
+    (add-to-list 'hevm-code-cache item)))
+
 (defun hevm-output-filter (string)
   "Hook for the Hevm process output."
   ;; Does the readline prompt occur in the output?
@@ -152,7 +162,8 @@ and send it as input.")
      (run-with-idle-timer 0 nil #'hevm-run-test))
 
     ;; Incoming new VM step information.
-    (`(step (vm ,vm) (file ,file) (srcmap ,offset ,length ,jump-type))
+    (`(step (vm ,vm) (file ,file) (srcmap ,offset ,length ,jump-type) (newCodes ,new-codes))
+     (hevm-add-to-cache new-codes)
      (hevm-update vm)
      (find-file-read-only (concat hevm-root file))
      (hevm-debug-mode)
@@ -162,13 +173,15 @@ and send it as input.")
      (when hevm-should-setup
        (setq hevm-should-setup nil)
        (delete-other-windows)
-       (split-window)
+       (select-window (split-window nil -10 'above))
        (switch-to-buffer hevm-stack-buffer)
-       (fit-window-to-buffer)
-       (other-window 1)))
+       (select-window (split-window nil nil 'right))
+       (switch-to-buffer hevm-bytecode-buffer)
+       (other-window -2)))
 
     ;; Incoming new VM step information without srcmap
-    (`(step (vm ,vm))
+    (`(step (vm ,vm) (newCodes ,newCodes))
+     (hevm-add-to-cache new-codes)
      (hevm-update vm)
      (hevm-highlight-source-region 0 0 'JumpRegular)
      (message "No srcmap!"))
@@ -219,21 +232,46 @@ and send it as input.")
 		 `((weight . "bold")
 		   (background-color . ,color)))))
 
+(defun hevm-get-current-contract-code (vm)
+  (let* ((contracts     (cadr (assoc 'contracts vm)))
+         (state         (cadr (assoc 'state vm)))
+         (code-contract (cadr (assoc 'code-contract state)))
+         (contract      (cadr (assoc code-contract contracts)))
+         (codehash      (cadr (assoc 'codehash contract)))
+         (code          (cadr (assoc codehash hevm-code-cache))))
+    code))
+
 (defun hevm-update (vm)
-  "Use a new EVM state and update live buffers like the stack viewer."
+  "Use a new EVM state and update live buffers like the stack viewer and bytecode viewer."
   (setq hevm-vm vm)
   (setq hevm-stack-buffer (get-buffer-create "*hevm stack*"))
+  (setq hevm-bytecode-buffer (get-buffer-create "*hevm bytecode*"))
   (let* ((state (cadr (assoc 'state hevm-vm)))
-	 (stack (cadr (assoc 'stack state))))
+	 (stack (cadr (assoc 'stack state)))
+         (pc    (cadr (assoc 'pc state)))
+         (code  (hevm-get-current-contract-code hevm-vm))
+         (current-index (seq-position code pc (lambda (x y) (equal (car x) y)))))
     (with-current-buffer hevm-stack-buffer
       (delete-region (point-min) (point-max))
       (let ((i 1))
 	(dolist (word stack)
 	  (insert (format "(%S) %S\n" i word))
-	  (setf i (+ i 1))))
-      (fit-window-to-buffer
-       (get-buffer-window hevm-stack-buffer)
-       16 6))))
+	  (setf i (+ i 1)))))
+    (with-current-buffer hevm-bytecode-buffer
+      (delete-region (point-min) (point-max))
+      (if code
+          (dolist (op code)
+            (pcase op
+              (`(,pc ,op)
+               (insert (format "%s\n" op)))
+              (_
+               (insert (format "%s\n" '(failed to display opcode))))))
+        (insert (format "%s\n" '(bytecode missing))))
+      (when (get-buffer-window hevm-bytecode-buffer)
+        (with-selected-window (get-buffer-window hevm-bytecode-buffer)
+          (beginning-of-buffer)
+          (forward-line current-index)
+          (recenter))))))
 
 (defun hevm-browse-contracts ()
   "Open a buffer that lists all the contracts in the current EVM.
