@@ -180,7 +180,7 @@ and send it as input.")
        (other-window -2)))
 
     ;; Incoming new VM step information without srcmap
-    (`(step (vm ,vm) (newCodes ,newCodes))
+    (`(step (vm ,vm) (newCodes ,new-codes))
      (hevm-add-to-cache new-codes)
      (hevm-update vm)
      (hevm-highlight-source-region 0 0 'JumpRegular)
