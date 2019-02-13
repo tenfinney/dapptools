@@ -320,8 +320,8 @@ allHashes :: VM -> Set W256
 allHashes vm = let cs = view (env . contracts) vm
   in Set.fromList ((view codehash) <$> Map.elems cs)
 
-prettifyCode :: ByteString -> [(Int, Op)]
-prettifyCode = Vector.toList . EVM.mkCodeOps
+prettifyCode :: ByteString -> String
+prettifyCode b = List.intercalate "\n" (opString <$> (Vector.toList (EVM.mkCodeOps b)))
 
 outputVm :: Console ()
 outputVm = do
@@ -453,9 +453,6 @@ instance SDisplay W256 where
 instance (SDisplay k, SDisplay v) => SDisplay (Map k v) where
   sexp x = L [L [sexp k, sexp v] | (k, v) <- Map.toList x]
 
-instance (Integral a, Show a) => SDisplay (a, Op) where
-  sexp (n, o) = L [A (txt n), A (txt (opString (n, o))) ]
-
 instance SDisplay a => SDisplay (Maybe a) where
   sexp Nothing = A "nil"
   sexp (Just x) = sexp x
@@ -483,6 +480,10 @@ instance SDisplay FrameState where
 
 instance SDisplay a => SDisplay [a] where
   sexp = L . map sexp
+
+-- this overlaps the neighbouring [a] instance
+instance {-# OVERLAPPING #-} SDisplay String where
+  sexp x = A (txt x)
 
 instance SDisplay Word where
   sexp (C Dull x) = A (quoted (txt x))
